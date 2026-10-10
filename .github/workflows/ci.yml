@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (.NET build + tests)
+    runs-on: ubuntu-latest
+    # Real PostgreSQL and Valkey for the integration tests, matching docker-compose.yml.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: base
+          POSTGRES_USER: base
+          POSTGRES_PASSWORD: base_dev_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U base -d base"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Base.slnx
+
+      - name: Build
+        run: dotnet build Base.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test Base.slnx -c Release --no-build --logger "trx" --results-directory TestResults
+
+      - name: Test summary
+        if: always()
+        run: |
+          total=0; passed=0; failed=0
+          for f in TestResults/*.trx; do
+            [ -f "$f" ] || continue
+            counters=$(grep -o '<Counters [^>]*>' "$f")
+            total=$((total + $(echo "$counters" | sed -E 's/.* total="([0-9]+)".*/\1/')))
+            passed=$((passed + $(echo "$counters" | sed -E 's/.* passed="([0-9]+)".*/\1/')))
+            failed=$((failed + $(echo "$counters" | sed -E 's/.* failed="([0-9]+)".*/\1/')))
+          done
+          echo "### .NET tests: $passed passed, $failed failed, $total total" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=.NET tests::$passed passed, $failed failed, $total total"
+          # Guard against a green build that silently ran no tests.
+          if [ "$total" -eq 0 ]; then echo "::error::No .NET tests were run"; exit 1; fi
+
+  frontend:
+    name: Frontend (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  images:
+    name: Docker images
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build API image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: src/Base.Api/Dockerfile
+          push: false
+          tags: base-api:ci
+
+      - name: Build web image
+        uses: docker/build-push-action@v7
+        with:
+          context: web
+          push: false
+          tags: base-web:ci

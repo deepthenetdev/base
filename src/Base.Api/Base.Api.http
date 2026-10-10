@@ -1,0 +1,19 @@
+### Try the API from VS Code (REST Client) or Visual Studio / Rider.
+@api = http://localhost:5080
+
+GET {{api}}/health/ready
+
+###
+GET {{api}}/api/todos
+
+###
+POST {{api}}/api/todos
+Content-Type: application/json
+
+{ "title": "Write my first feature" }
+
+###
+PATCH {{api}}/api/todos/00000000-0000-0000-0000-000000000000
+Content-Type: application/json
+
+{ "isDone": true }
