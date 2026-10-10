@@ -1,0 +1,10 @@
+# Context for the API image (repo root). Keep it small: only what the build needs.
+**/bin
+**/obj
+**/node_modules
+web/
+tests/
+docs/
+.git
+.github
+*.md
