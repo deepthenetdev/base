@@ -55,7 +55,23 @@ jobs:
         run: dotnet build Base.slnx -c Release --no-restore
 
       - name: Test
-        run: dotnet test Base.slnx -c Release --no-build --verbosity normal
+        run: dotnet test Base.slnx -c Release --no-build --logger "trx" --results-directory TestResults
+
+      - name: Test summary
+        if: always()
+        run: |
+          total=0; passed=0; failed=0
+          for f in TestResults/*.trx; do
+            [ -f "$f" ] || continue
+            counters=$(grep -o '<Counters [^>]*>' "$f")
+            total=$((total + $(echo "$counters" | sed -E 's/.* total="([0-9]+)".*/\1/')))
+            passed=$((passed + $(echo "$counters" | sed -E 's/.* passed="([0-9]+)".*/\1/')))
+            failed=$((failed + $(echo "$counters" | sed -E 's/.* failed="([0-9]+)".*/\1/')))
+          done
+          echo "### .NET tests: $passed passed, $failed failed, $total total" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=.NET tests::$passed passed, $failed failed, $total total"
+          # Guard against a green build that silently ran no tests.
+          if [ "$total" -eq 0 ]; then echo "::error::No .NET tests were run"; exit 1; fi
 
   frontend:
     name: Frontend (lint, typecheck, test, build)
